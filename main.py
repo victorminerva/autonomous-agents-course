@@ -38,14 +38,17 @@ with left_col:
 
     # CSV file selection
     csv_files = list_csv_files("data")
-    selected_file = None
     if csv_files:
         selected_file = st.selectbox("📂 Choose a CSV file:", csv_files)
+        st.session_state["selected_file"] = selected_file
     else:
+        st.session_state["selected_file"] = None
         st.info("No CSV files found. Please upload one to continue.")
 
 # --- RIGHT: Preview + Chat ---
 with right_col:
+    selected_file = st.session_state.get("selected_file")
+
     if selected_file:
         df = load_csv(os.path.join("data", selected_file))
 
