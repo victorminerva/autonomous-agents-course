@@ -66,16 +66,16 @@ User asks a question in natural language
         │
         ▼
 OpenAI GPT-3.5 Turbo (via OpenAI API) ←───────────────┐
-        │                                            │
-        ▼                                            │
-Query Engine interprets the question                 │
-        │                                            │
-        ▼                                            │
-Vector Index over the CSVs                           │
-        │                                            │
-        ▼                                            │
-SimpleDirectoryReader loads the files                │
-        └────────────────────────────────────────────┘
+        │                                             │
+        ▼                                             │
+Query Engine interprets the question                  │
+        │                                             │
+        ▼                                             │
+Vector Index over the CSVs                            │
+        │                                             │
+        ▼                                             │
+SimpleDirectoryReader loads the files                 │
+        └─────────────────────────────────────────────┘
 ```
 
 - **User** interacts via the Streamlit interface, asking questions about the CSV data.
