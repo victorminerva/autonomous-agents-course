@@ -1,13 +1,12 @@
 # This agent read all the .csv and .txt files and create a vectorial semantic index. 
 # Also do some questions with natu
-from llama_index.core import SimpleDirectoryReader, VectorStoreIndex
-from llama_index.core.settings import Settings
+from langchain_experimental.agents import create_pandas_dataframe_agent
 from langchain.chat_models import ChatOpenAI
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+from langchain.embeddings import OpenAIEmbeddings
 from dotenv import load_dotenv
 import os
 
-def build_agent(data_path="data"):
+def build_agent(df):
     load_dotenv()
     api_key = os.getenv("OPENAI_API_KEY")
     base_url = os.getenv("OPENAI_BASE_URL")
@@ -20,15 +19,20 @@ def build_agent(data_path="data"):
         openai_api_key=api_key,
         openai_api_base=base_url,
         temperature=0.3,
-        max_tokens=512
+        max_tokens=256  # Avoid credit/token errors
     )
 
-    embed_model = HuggingFaceEmbedding(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    embed_model = OpenAIEmbeddings(
+        openai_api_key=api_key,
+        model="text-embedding-ada-002",
+        chunk_size=1000
+    )
 
-    Settings.llm = llm
-    Settings.embed_model = embed_model
+    agent = create_pandas_dataframe_agent(
+        llm,
+        df,
+        verbose=False,
+        allow_dangerous_code=True
+    )
 
-    documents = SimpleDirectoryReader(input_dir=data_path).load_data()
-    index = VectorStoreIndex.from_documents(documents)
-
-    return index.as_query_engine()
+    return agent, embed_model
