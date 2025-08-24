@@ -85,7 +85,18 @@ def working_days_between(d1, d2, first_day, last_day):
     d2 = min(d2, last_day)
     if d2 < d1:
         return 0
-    rng = [d for d in pd.date_range(d1, d2, freq="D").date if d.weekday() < 5]
+    # Feriados
+    feriados = set()
+    try:
+        # file_feriados é global, mas pode não existir
+        global file_feriados
+        if 'file_feriados' in globals() and file_feriados:
+            df_fer = read_csv_robust(file_feriados)
+            col = [c for c in df_fer.columns if 'data' in c.lower()][0]
+            feriados = set(df_fer[col].apply(parse_br_date).dropna())
+    except Exception:
+        pass
+    rng = [d for d in pd.date_range(d1, d2, freq="D").date if d.weekday() < 5 and d not in feriados]
     return len(rng)
 
 # ---------- Sidebar: inputs ----------
@@ -218,6 +229,36 @@ if run:
     for col in ["DIAS DE FÉRIAS", "DIAS UTEIS"]:
         if col in base_final.columns:
             base_final[col] = base_final[col].fillna(0)
+
+    # Exclusão por cargo, país, afastamento, estagiário/aprendiz
+    cargos_excluir = ["diretor", "estagiário", "estagiario", "aprendiz"]
+    if "TITULO DO CARGO" in base_final.columns:
+        base_final = base_final[~base_final["TITULO DO CARGO"].str.lower().str.contains('|'.join(cargos_excluir), na=False)]
+    if "DESC. SITUACAO" in base_final.columns:
+        base_final = base_final[~base_final["DESC. SITUACAO"].str.lower().str.contains("afast", na=False)]
+    if "PAIS" in base_final.columns:
+        base_final = base_final[~base_final["PAIS"].str.lower().str.contains("exterior|international|estrangeiro", na=False)]
+    # Excluir por matrícula nas planilhas de estagiário/aprendiz/exterior
+    exclu_set = set()
+    for f in [file_aprendiz, file_estagio, file_exterior]:
+        if f:
+            try:
+                df = read_csv_robust(f); df = clean_id(df, "MATRICULA")
+                exclu_set.update(df["MATRICULA"].dropna().astype(str))
+            except Exception:
+                pass
+    if exclu_set:
+        base_final = base_final[~base_final["MATRICULA"].astype(str).isin(exclu_set)]
+
+    # Validação/correção de datas e férias
+    date_cols = [c for c in base_final.columns if "data" in c.lower() or "admiss" in c.lower() or "demiss" in c.lower()]
+    for col in date_cols:
+        base_final[col] = base_final[col].apply(parse_br_date)
+    if "DIAS DE FÉRIAS" in base_final.columns:
+        base_final["DIAS DE FÉRIAS"] = pd.to_numeric(base_final["DIAS DE FÉRIAS"], errors="coerce").fillna(0).astype(int)
+    # Corrige férias mal preenchidas (negativos ou > dias mês)
+    if "DIAS DE FÉRIAS" in base_final.columns:
+        base_final["DIAS DE FÉRIAS"] = base_final["DIAS DE FÉRIAS"].clip(lower=0, upper=cap_dias_mes)
 
     # --- LLM para exclusão/correção inteligente ---
     if llm_enabled and openrouter_api_key:
