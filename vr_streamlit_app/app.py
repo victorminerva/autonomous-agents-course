@@ -4,6 +4,9 @@ import numpy as np
 from datetime import date, datetime, timedelta
 from dateutil import parser as dateparser
 import io
+import requests
+import os
+from dotenv import load_dotenv
 
 st.set_page_config(page_title="VR Agent — Streamlit", layout="wide")
 
@@ -86,37 +89,220 @@ def working_days_between(d1, d2, first_day, last_day):
     return len(rng)
 
 # ---------- Sidebar: inputs ----------
+
 st.sidebar.header("⚙️ Parâmetros")
 competencia = st.sidebar.text_input("Competência (YYYY-MM)", value=date.today().strftime("%Y-%m"))
 cap_dias_mes = st.sidebar.number_input("Cap de dias por mês", min_value=1, max_value=31, value=22, step=1)
 
+st.sidebar.header("🤖 LLM Agent (OpenRouter)")
+# Carrega chave do .env se existir
+load_dotenv()
+openrouter_api_key = os.getenv("OPENAI_API_KEY", "")
+llm_enabled = st.sidebar.checkbox("Usar agente LLM para consolidação", value=False)
+
 st.sidebar.header("📥 Planilhas")
+
+# Bases principais
 file_ativos = st.sidebar.file_uploader("ATIVOS.csv", type=["csv"], accept_multiple_files=False)
+file_ferias = st.sidebar.file_uploader("FÉRIAS.csv", type=["csv"], accept_multiple_files=False)
+file_desligados = st.sidebar.file_uploader("DESLIGADOS.csv", type=["csv"], accept_multiple_files=False)
+file_admissoes = st.sidebar.file_uploader("ADMISSÕES.csv (ex.: ADMISSÃO ABRIL.csv)", type=["csv"], accept_multiple_files=False)
+file_sindicato_valor = st.sidebar.file_uploader("valor_por_sindicato.csv (SINDICATO, VALOR)", type=["csv"], accept_multiple_files=False)
+file_dias_uteis = st.sidebar.file_uploader("Base dias uteis.csv (SINDICATO, DIAS UTEIS)", type=["csv"], accept_multiple_files=False)
+# Bases opcionais (mantidas para compatibilidade com o restante do código)
 file_aprendiz = st.sidebar.file_uploader("APRENDIZ.csv (opcional)", type=["csv"], accept_multiple_files=False)
 file_estagio = st.sidebar.file_uploader("ESTÁGIO.csv (opcional)", type=["csv"], accept_multiple_files=False)
 file_afastamentos = st.sidebar.file_uploader("AFASTAMENTOS.csv (opcional)", type=["csv"], accept_multiple_files=False)
-file_ferias = st.sidebar.file_uploader("FÉRIAS.csv (opcional)", type=["csv"], accept_multiple_files=False)
-file_admissoes = st.sidebar.file_uploader("ADMISSÕES.csv (ex.: ADMISSÃO ABRIL.csv) (opcional)", type=["csv"], accept_multiple_files=False)
-file_desligados = st.sidebar.file_uploader("DESLIGADOS.csv (opcional)", type=["csv"], accept_multiple_files=False)
-file_dias_uteis = st.sidebar.file_uploader("Base dias uteis.csv (SINDICATO, DIAS UTEIS)", type=["csv"], accept_multiple_files=False)
-file_valor_sind = st.sidebar.file_uploader("valor_por_sindicato.csv (SINDICATO, VALOR) (opcional)", type=["csv"], accept_multiple_files=False)
+file_valor_sind = file_sindicato_valor  # compatibilidade
 file_exterior = st.sidebar.file_uploader("EXTERIOR.csv (MATRICULA, Valor) (opcional)", type=["csv"], accept_multiple_files=False)
+
+# ...existing code...
 
 run = st.sidebar.button("▶️ Calcular")
 
 # ---------- Main logic ----------
+
+def call_openrouter_agent(prompt, api_key, model="openai/gpt-3.5-turbo"):
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "Você é um agente Python especialista em consolidação de bases de dados."},
+            {"role": "user", "content": prompt}
+        ],
+        "max_tokens": 1200,
+        "temperature": 0.2
+    }
+    resp = requests.post(url, headers=headers, json=payload)
+    if resp.status_code == 200:
+        return resp.json()["choices"][0]["message"]["content"]
+    else:
+        return f"Erro na chamada OpenRouter: {resp.text}"
+
 if run:
     errors = []
     if not file_ativos:
         st.error("Envie o arquivo ATIVOS.csv.")
         st.stop()
 
+
+    # Leitura das 5 bases principais
     try:
         ativos = read_csv_robust(file_ativos); ativos.columns = [c.strip() for c in ativos.columns]
         ativos = clean_id(ativos, "MATRICULA")
     except Exception as e:
         st.error(f"Falha ao ler ATIVOS.csv: {e}")
         st.stop()
+
+    try:
+        ferias = read_csv_robust(file_ferias) if file_ferias else pd.DataFrame()
+        if not ferias.empty: ferias.columns = [c.strip() for c in ferias.columns]; ferias = clean_id(ferias, "MATRICULA")
+    except Exception as e:
+        errors.append(f"Falha ao ler FÉRIAS.csv: {e}")
+        ferias = pd.DataFrame()
+
+    try:
+        desligados = read_csv_robust(file_desligados) if file_desligados else pd.DataFrame()
+        if not desligados.empty: desligados.columns = [c.strip() for c in desligados.columns]; desligados = clean_id(desligados, "MATRICULA")
+    except Exception as e:
+        errors.append(f"Falha ao ler DESLIGADOS.csv: {e}")
+        desligados = pd.DataFrame()
+
+    try:
+        admitidos = read_csv_robust(file_admissoes) if file_admissoes else pd.DataFrame()
+        if not admitidos.empty: admitidos.columns = [c.strip() for c in admitidos.columns]; admitidos = clean_id(admitidos, "MATRICULA")
+    except Exception as e:
+        errors.append(f"Falha ao ler ADMISSÕES.csv: {e}")
+        admitidos = pd.DataFrame()
+
+    try:
+        sindicato_valor = read_csv_robust(file_sindicato_valor) if file_sindicato_valor else pd.DataFrame()
+        if not sindicato_valor.empty: sindicato_valor.columns = [c.strip() for c in sindicato_valor.columns]
+    except Exception as e:
+        errors.append(f"Falha ao ler valor_por_sindicato.csv: {e}")
+        sindicato_valor = pd.DataFrame()
+
+    try:
+        dias_uteis = read_csv_robust(file_dias_uteis) if file_dias_uteis else pd.DataFrame()
+        if not dias_uteis.empty: dias_uteis.columns = [c.strip() for c in dias_uteis.columns]
+    except Exception as e:
+        errors.append(f"Falha ao ler Base dias uteis.csv: {e}")
+        dias_uteis = pd.DataFrame()
+
+
+
+    # Consolidação direta das bases
+    st.info("Consolidando bases localmente...")
+    base_final = ativos.copy()
+    # Merge com as demais bases
+    if not ferias.empty:
+        base_final = base_final.merge(ferias, on="MATRICULA", how="left")
+    if not desligados.empty:
+        base_final = base_final.merge(desligados, on="MATRICULA", how="left")
+    if not admitidos.empty:
+        base_final = base_final.merge(admitidos, on="MATRICULA", how="left")
+    if not sindicato_valor.empty:
+        sindicato_col = "SINDICATO" if "SINDICATO" in sindicato_valor.columns else None
+        if sindicato_col and "Sindicato" in base_final.columns:
+            base_final = base_final.merge(sindicato_valor, left_on="Sindicato", right_on=sindicato_col, how="left")
+    if not dias_uteis.empty:
+        dias_col = "SINDICATO" if "SINDICATO" in dias_uteis.columns else None
+        if dias_col and "Sindicato" in base_final.columns:
+            base_final = base_final.merge(dias_uteis, left_on="Sindicato", right_on=dias_col, how="left")
+
+    # Preencher valores ausentes
+    for col in ["DIAS DE FÉRIAS", "DIAS UTEIS"]:
+        if col in base_final.columns:
+            base_final[col] = base_final[col].fillna(0)
+
+    # --- LLM para exclusão/correção inteligente ---
+    if llm_enabled and openrouter_api_key:
+        st.info("Analisando exclusões e correções com LLM...")
+        # Amostra da base consolidada para prompt
+        sample_csv = base_final.head(30).to_csv(index=False)
+        prompt = f"""
+Você é um agente Python especialista em tratamento de dados de RH. Analise a base abaixo e:
+1. Liste as matrículas que devem ser excluídas, considerando: diretores, estagiários, aprendizes, afastados (ex: licença maternidade), profissionais no exterior. Use as colunas de cargo, situação, afastamento, país, etc.
+2. Liste correções necessárias: datas quebradas, campos faltantes, férias mal preenchidas, feriados estaduais/municipais não aplicados.
+Base (CSV):\n{sample_csv}
+Responda em JSON com duas chaves: 'excluir' (lista de matrículas) e 'correcoes' (lista de instruções).
+"""
+        import json
+        llm_response = call_openrouter_agent(prompt, openrouter_api_key, model="openai/gpt-3.5-turbo")
+        # Tenta limpar espaços/quebras de linha antes do parsing
+        llm_response_clean = llm_response.strip()
+        try:
+            result = json.loads(llm_response_clean)
+            excluir = result.get("excluir", [])
+            correcoes = result.get("correcoes", [])
+        except Exception:
+            # Tenta encontrar o JSON dentro da resposta
+            import re
+            match = re.search(r'\{[\s\S]*\}', llm_response_clean)
+            if match:
+                try:
+                    result = json.loads(match.group(0))
+                    excluir = result.get("excluir", [])
+                    correcoes = result.get("correcoes", [])
+                except Exception:
+                    st.warning("Não foi possível interpretar a resposta da LLM. Veja abaixo:")
+                    st.code(llm_response)
+                    excluir, correcoes = [], []
+            else:
+                st.warning("Não foi possível interpretar a resposta da LLM. Veja abaixo:")
+                st.code(llm_response)
+                excluir, correcoes = [], []
+        # Aplicar exclusões
+        if excluir:
+            base_final = base_final[~base_final["MATRICULA"].isin(excluir)]
+            st.success(f"{len(excluir)} registros excluídos conforme instrução da LLM.")
+
+        # Se houver correções, pedir para a LLM aplicar e devolver a base corrigida em lotes
+        if correcoes:
+            st.info("Correções sugeridas pela LLM:")
+            for corr in correcoes:
+                st.write(f"- {corr}")
+            st.info("Solicitando à LLM a base corrigida em lotes...")
+            import io
+            import pandas as pd
+            batch_size = 20
+            batches = [base_final.iloc[i:i+batch_size] for i in range(0, len(base_final), batch_size)]
+            base_corrigida_list = []
+            for idx, batch in enumerate(batches):
+                st.write(f"Processando lote {idx+1}/{len(batches)}...")
+                corr_prompt = f"""
+Você é um agente Python especialista em tratamento de dados de RH. Aplique as seguintes correções na base abaixo e devolva a base corrigida em formato CSV. Correções:
+{json.dumps(correcoes, ensure_ascii=False)}
+Base (CSV):\n{batch.to_csv(index=False)}
+"""
+                corr_response = call_openrouter_agent(corr_prompt, openrouter_api_key, model="openai/gpt-3.5-turbo")
+                csv_start = corr_response.find("MATRICULA")
+                if csv_start != -1:
+                    csv_data = corr_response[csv_start:]
+                else:
+                    csv_data = corr_response
+                try:
+                    batch_corrigido = pd.read_csv(io.StringIO(csv_data))
+                    base_corrigida_list.append(batch_corrigido)
+                except Exception:
+                    st.warning(f"Não foi possível interpretar o lote {idx+1} corrigido pela LLM. Veja abaixo:")
+                    st.code(corr_response)
+            if base_corrigida_list:
+                base_final = pd.concat(base_corrigida_list, ignore_index=True)
+                st.success("Base corrigida pela LLM aplicada em todos os lotes!")
+
+    # Exibir resultado consolidado
+    st.subheader("📊 Base Consolidada")
+    st.dataframe(base_final.head(1000), use_container_width=True)
+    # Download
+    csv_final = base_final.to_csv(index=False, encoding="utf-8-sig")
+    st.download_button("⬇️ Baixar Base Consolidada (CSV)", data=csv_final, file_name=f"base_consolidada_{competencia.replace('-','')}.csv", mime="text/csv")
+
+# ...existing code...
 
     # Excluir aprendiz/estagiário
     def safe_ids(file):
