@@ -109,7 +109,7 @@ st.sidebar.header("🤖 LLM Agent (OpenRouter)")
 # Carrega chave do .env se existir
 load_dotenv()
 openrouter_api_key = os.getenv("OPENAI_API_KEY", "")
-llm_enabled = st.sidebar.checkbox("Usar agente LLM para consolidação", value=False)
+llm_enabled = True  # Sempre usa LLM para consolidar
 
 st.sidebar.header("📥 Planilhas")
 
